@@ -13,7 +13,14 @@ const productSchema = new mongoose.Schema({
     },
     description: { type: String },
     stock: { type: Number, default: 24 },
-    inStock: { type: Boolean, default: true }
+    inStock: { type: Boolean, default: true },
+    reviews: [{
+        user: { type: String, required: true },
+        rating: { type: Number, required: true },
+        comment: { type: String, required: true },
+        date: { type: Date, default: Date.now }
+    }],
+    numReviews: { type: Number, default: 0 }
 }, { timestamps: true });
 
 // Virtual for id to match frontend expectation

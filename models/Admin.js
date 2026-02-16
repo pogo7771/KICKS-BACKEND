@@ -9,6 +9,7 @@ const adminSchema = new mongoose.Schema({
     bio: { type: String, default: '' },
     avatar: { type: String, default: '' },
     twoFactorEnabled: { type: Boolean, default: false },
+    twoFactorSecret: { type: String, default: null },
     failedLoginAttempts: { type: Number, default: 0 },
     lockedUntil: { type: Date, default: null },
     resetPasswordToken: { type: String, default: null },

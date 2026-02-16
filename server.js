@@ -13,15 +13,12 @@ const User = require('./models/User');
 const Admin = require('./models/Admin');
 const Settings = require('./models/Settings');
 const SecurityLog = require('./models/SecurityLog');
+const Coupon = require('./models/Coupon');
 
 const app = express();
 
 // Middleware
-app.use(cors({
-    origin: process.env.FRONTEND_URL || '*', // Allow specific frontend or all
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    credentials: true
-}));
+app.use(cors());
 app.use(express.json({ limit: '5mb' }));
 app.use(helmet());
 
@@ -85,6 +82,41 @@ app.post('/api/auth/login', async (req, res) => {
 
         const token = jwt.sign({ id: user._id, isAdmin: false }, process.env.JWT_SECRET, { expiresIn: '7d' });
         res.json({ token, user: { id: user._id, name: user.name, email: user.email, isAdmin: false } });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+app.put('/api/auth/profile/:id', async (req, res) => {
+    try {
+        const { name, email } = req.body;
+        const user = await User.findById(req.params.id);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        user.name = name || user.name;
+        user.email = email || user.email;
+        await user.save();
+
+        res.json({ id: user._id, name: user.name, email: user.email, isAdmin: false });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+app.put('/api/auth/password/:id', async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+        const user = await User.findById(req.params.id);
+
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        const isMatch = await user.comparePassword(currentPassword);
+        if (!isMatch) return res.status(400).json({ message: 'Incorrect current password' });
+
+        user.password = newPassword;
+        await user.save();
+
+        res.json({ message: 'Password updated successfully' });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
@@ -452,6 +484,68 @@ app.delete('/api/products/:id', async (req, res) => {
     }
 });
 
+app.post('/api/products/:id/reviews', async (req, res) => {
+    try {
+        const { rating, comment, user } = req.body;
+        const product = await Product.findById(req.params.id);
+
+        if (product) {
+            const alreadyReviewed = product.reviews.find(
+                (r) => r.user === user
+            );
+
+            if (alreadyReviewed) {
+                return res.status(400).json({ message: 'Product already reviewed' });
+            }
+
+            const review = {
+                user,
+                rating: Number(rating),
+                comment,
+                date: Date.now()
+            };
+
+            product.reviews.push(review);
+            product.numReviews = product.reviews.length;
+            product.rating = product.reviews.reduce((acc, item) => item.rating + acc, 0) / product.reviews.length;
+
+            await product.save();
+            res.status(201).json({ message: 'Review added' });
+        } else {
+            res.status(404).json({ message: 'Product not found' });
+        }
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+});
+
+app.delete('/api/products/:id/reviews/:reviewId', async (req, res) => {
+    try {
+        const product = await Product.findById(req.params.id);
+        if (product) {
+            const reviewIndex = product.reviews.findIndex(r => r._id.toString() === req.params.reviewId);
+
+            if (reviewIndex === -1) {
+                return res.status(404).json({ message: 'Review not found' });
+            }
+
+            product.reviews.splice(reviewIndex, 1);
+
+            product.numReviews = product.reviews.length;
+            product.rating = product.reviews.length > 0
+                ? product.reviews.reduce((acc, item) => item.rating + acc, 0) / product.reviews.length
+                : 0;
+
+            await product.save();
+            res.json({ message: 'Review removed' });
+        } else {
+            res.status(404).json({ message: 'Product not found' });
+        }
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+});
+
 // Routes - Orders
 app.get('/api/orders', async (req, res) => {
     try {
@@ -591,6 +685,81 @@ app.post('/api/create-payment-intent', async (req, res) => {
     } catch (e) {
         console.error("Stripe Error:", e.message);
         res.status(400).send({ error: { message: e.message } });
+    }
+});
+
+// Routes - Coupons
+app.get('/api/coupons', async (req, res) => {
+    try {
+        const coupons = await Coupon.find().sort({ createdAt: -1 });
+        res.json(coupons);
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+app.post('/api/coupons', async (req, res) => {
+    try {
+        const coupon = new Coupon(req.body);
+        const newCoupon = await coupon.save();
+        await SecurityLog.create({
+            event: 'COUPON_CREATE',
+            userEmail: 'admin@system.local',
+            details: `Created coupon: ${newCoupon.code}`,
+            severity: 'LOW',
+            status: 'SUCCESS'
+        });
+        res.status(201).json(newCoupon);
+    } catch (err) {
+        res.status(400).json({ message: err.message });
+    }
+});
+
+app.delete('/api/coupons/:id', async (req, res) => {
+    try {
+        const deletedCoupon = await Coupon.findByIdAndDelete(req.params.id);
+        await SecurityLog.create({
+            event: 'COUPON_DELETE',
+            userEmail: 'admin@system.local',
+            details: `Deleted coupon: ${deletedCoupon?.code}`,
+            severity: 'MEDIUM',
+            status: 'SUCCESS'
+        });
+        res.json({ message: 'Coupon deleted' });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+app.post('/api/coupons/validate', async (req, res) => {
+    try {
+        const { code, cartTotal } = req.body;
+        const coupon = await Coupon.findOne({ code, isActive: true });
+
+        if (!coupon) return res.status(404).json({ message: 'Invalid coupon code' });
+
+        if (coupon.expiryDate && new Date(coupon.expiryDate) < new Date()) {
+            return res.status(400).json({ message: 'Coupon has expired' });
+        }
+
+        if (cartTotal < coupon.minPurchase) {
+            return res.status(400).json({ message: `Minimum purchase of ${coupon.minPurchase} required` });
+        }
+
+        let discount = 0;
+        if (coupon.type === 'percentage') {
+            discount = (cartTotal * coupon.value) / 100;
+        } else {
+            discount = coupon.value;
+        }
+
+        res.json({
+            success: true,
+            discount: Math.min(discount, cartTotal), // Discount cannot exceed total
+            coupon: coupon
+        });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
     }
 });
 
