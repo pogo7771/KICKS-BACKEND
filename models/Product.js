@@ -1,36 +1,81 @@
-const mongoose = require('mongoose');
+const { Model, DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
 
-const productSchema = new mongoose.Schema({
-    name: { type: String, required: true },
-    brand: { type: String },
-    price: { type: Number, required: true },
-    rating: { type: Number, default: 0 },
-    category: { type: String, required: true },
-    gender: { type: String },
-    images: {
-        primary: { type: String, required: true },
-        secondary: { type: String }
+class Product extends Model {
+    static associate(models) {
+        // Example: Product.hasMany(models.Review)
+    }
+}
+
+Product.init({
+    id: {
+        type: DataTypes.INTEGER,
+        primaryKey: true,
+        autoIncrement: true
     },
-    description: { type: String },
-    stock: { type: Number, default: 24 },
-    inStock: { type: Boolean, default: true },
-    reviews: [{
-        user: { type: String, required: true },
-        rating: { type: Number, required: true },
-        comment: { type: String, required: true },
-        date: { type: Date, default: Date.now }
-    }],
-    numReviews: { type: Number, default: 0 }
-}, { timestamps: true });
-
-// Virtual for id to match frontend expectation
-productSchema.virtual('id').get(function () {
-    return this._id.toHexString();
+    name: {
+        type: DataTypes.STRING,
+        allowNull: false
+    },
+    brand: {
+        type: DataTypes.STRING
+    },
+    price: {
+        type: DataTypes.FLOAT,
+        allowNull: false
+    },
+    rating: {
+        type: DataTypes.FLOAT,
+        defaultValue: 0
+    },
+    category: {
+        type: DataTypes.STRING,
+        allowNull: false
+    },
+    gender: {
+        type: DataTypes.STRING
+    },
+    images: {
+        type: DataTypes.JSON,
+        get() {
+            const rawValue = this.getDataValue('images');
+            return typeof rawValue === 'string' ? JSON.parse(rawValue) : rawValue;
+        }
+    },
+    description: {
+        type: DataTypes.TEXT
+    },
+    stock: {
+        type: DataTypes.INTEGER,
+        defaultValue: 24
+    },
+    inStock: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: true
+    },
+    reviews: {
+        type: DataTypes.JSON,
+        defaultValue: [],
+        get() {
+            const rawValue = this.getDataValue('reviews');
+            return typeof rawValue === 'string' ? JSON.parse(rawValue) : (rawValue || []);
+        }
+    },
+    numReviews: {
+        type: DataTypes.INTEGER,
+        defaultValue: 0
+    }
+}, {
+    sequelize,
+    modelName: 'Product',
+    tableName: 'Products',
+    timestamps: true
 });
 
-// Ensure virtuals are serialized
-productSchema.set('toJSON', {
-    virtuals: true
-});
+Product.prototype.toJSON = function () {
+    const values = Object.assign({}, this.get());
+    values._id = values.id;
+    return values;
+};
 
-module.exports = mongoose.model('Product', productSchema);
+module.exports = Product;

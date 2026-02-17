@@ -1,31 +1,66 @@
-const mongoose = require('mongoose');
+const { Model, DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
 
-const orderSchema = new mongoose.Schema({
-    customer: { type: String, required: true },
-    email: { type: String }, // For guest checkout or linking by email
-    userId: { type: String }, // Robust linking for logged-in users
-    date: { type: String }, // Storing as string to match existing frontend date format
-    amount: { type: Number, required: true },
-    status: { type: String, default: 'Processing' },
-    paymentMethod: { type: String, default: 'COD' },
-    discount: { type: Number, default: 0 },
-    coupon: { type: String, default: null },
-    items: [{
-        id: { type: String },
-        name: { type: String },
-        price: { type: Number },
-        quantity: { type: Number },
-        size: { type: String }
-    }]
-}, { timestamps: true });
+class Order extends Model { }
 
-// Virtual for id
-orderSchema.virtual('id').get(function () {
-    return this._id.toHexString();
+Order.init({
+    id: {
+        type: DataTypes.INTEGER,
+        primaryKey: true,
+        autoIncrement: true
+    },
+    customer: {
+        type: DataTypes.STRING,
+        allowNull: false
+    },
+    email: {
+        type: DataTypes.STRING
+    },
+    userId: {
+        type: DataTypes.STRING
+    },
+    date: {
+        type: DataTypes.STRING
+    },
+    amount: {
+        type: DataTypes.FLOAT,
+        allowNull: false
+    },
+    status: {
+        type: DataTypes.STRING,
+        defaultValue: 'Processing'
+    },
+    paymentMethod: {
+        type: DataTypes.STRING,
+        defaultValue: 'COD'
+    },
+    discount: {
+        type: DataTypes.FLOAT,
+        defaultValue: 0
+    },
+    coupon: {
+        type: DataTypes.STRING,
+        defaultValue: null
+    },
+    items: {
+        type: DataTypes.JSON,
+        defaultValue: [],
+        get() {
+            const rawValue = this.getDataValue('items');
+            return typeof rawValue === 'string' ? JSON.parse(rawValue) : (rawValue || []);
+        }
+    }
+}, {
+    sequelize,
+    modelName: 'Order',
+    tableName: 'Orders',
+    timestamps: true
 });
 
-orderSchema.set('toJSON', {
-    virtuals: true
-});
+Order.prototype.toJSON = function () {
+    const values = Object.assign({}, this.get());
+    values._id = values.id;
+    return values;
+};
 
-module.exports = mongoose.model('Order', orderSchema);
+module.exports = Order;

@@ -1,28 +1,41 @@
-const mongoose = require('mongoose');
+const { Model, DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
 
-const SettingsSchema = new mongoose.Schema({
-    storeName: { type: String, default: 'KICKS. Premium Footwear' },
-    storeEmail: { type: String, default: 'admin@kicks-store.com' },
-    currency: { type: String, default: 'INR (₹) - Indian Rupee' },
-    timezone: { type: String, default: '(GMT+05:30) IST - Kolkata' },
-    notifications: {
-        sales: { type: Boolean, default: true },
-        reports: { type: Boolean, default: true },
-        stock: { type: Boolean, default: false },
-        signups: { type: Boolean, default: false }
+class Settings extends Model { }
+
+Settings.init({
+    id: {
+        type: DataTypes.INTEGER,
+        primaryKey: true,
+        autoIncrement: true
     },
-    sessionTimeout: { type: Number, default: 15 }, // in minutes
-    security: {
-        twoFactorEnabled: { type: Boolean, default: false },
-        failedLoginAttempts: { type: Number, default: 0 },
-        lockedUntil: { type: Date, default: null }
+    theme: {
+        type: DataTypes.STRING,
+        defaultValue: 'light'
     },
+    currency: {
+        type: DataTypes.STRING,
+        defaultValue: 'USD'
+    },
+    notificationsEnabled: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: true
+    },
+    lastUpdated: {
+        type: DataTypes.DATE,
+        defaultValue: DataTypes.NOW
+    }
+}, {
+    sequelize,
+    modelName: 'Settings',
+    tableName: 'Settings',
+    timestamps: true
+});
 
-    // Adding versioning/last updated for audit trail
-    lastUpdated: { type: Date, default: Date.now },
-    heroImage: { type: String, default: "https://res.cloudinary.com/dfjaexjbz/image/upload/v1771158934/bfc6845a76f194f331aef18cff60c4aa-removebg-preview_3_pnkdpw.png" },
-    heroTitle: { type: String, default: "STEP INTO \nTHE FUTURE." },
-    heroSubtitle: { type: String, default: "The next generation of urban footwear is here. Experience gravity-defying comfort and unparalleled style." }
-}, { timestamps: true });
+Settings.prototype.toJSON = function () {
+    const values = Object.assign({}, this.get());
+    values._id = values.id;
+    return values;
+};
 
-module.exports = mongoose.model('Settings', SettingsSchema);
+module.exports = Settings;

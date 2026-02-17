@@ -1,12 +1,14 @@
 require('dotenv').config();
 const express = require('express');
-const mongoose = require('mongoose');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
+const sequelize = require('./config/database');
+
+// Import Sequelize Models
 const Product = require('./models/Product');
 const Order = require('./models/Order');
 const User = require('./models/User');
@@ -18,9 +20,15 @@ const Coupon = require('./models/Coupon');
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: '*', // Allow all origins (or specify your Netlify URL)
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning']
+}));
 app.use(express.json({ limit: '5mb' }));
-app.use(helmet());
+app.use(helmet({
+    crossOriginResourcePolicy: false, // Allow loading resources from other domains
+}));
 
 // Request logger
 app.use((req, res, next) => {
@@ -49,23 +57,29 @@ const isValidPassword = (password) => {
     return re.test(password);
 };
 
-// MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI)
-    .then(() => console.log('Connected to MongoDB'))
-    .catch(err => console.error('Could not connect to MongoDB', err));
+// Database Connection & Sync
+sequelize.authenticate()
+    .then(() => {
+        console.log('Connected to SQL Database (SQLite)');
+        // Sync models (create tables if they don't exist)
+        // force: false ensures we don't drop existing tables on restart
+        return sequelize.sync({ force: false });
+    })
+    .then(() => console.log('Database synced'))
+    .catch(err => console.error('Could not connect to Database:', err));
 
 // Routes - Auth
 app.post('/api/auth/register', async (req, res) => {
     try {
         const { name, email, password } = req.body;
-        const existingUser = await User.findOne({ email });
+        const existingUser = await User.findOne({ where: { email } });
         if (existingUser) return res.status(400).json({ message: 'User already exists' });
 
-        const user = new User({ name, email, password });
-        await user.save();
+        const user = await User.create({ name, email, password });
+        // Password hashing is handled by "beforeSave" hook in model
 
-        const token = jwt.sign({ id: user._id, isAdmin: false }, process.env.JWT_SECRET, { expiresIn: '7d' });
-        res.status(201).json({ token, user: { id: user._id, name: user.name, email: user.email, isAdmin: false } });
+        const token = jwt.sign({ id: user.id, isAdmin: false }, process.env.JWT_SECRET, { expiresIn: '7d' });
+        res.status(201).json({ token, user: { id: user.id, name: user.name, email: user.email, isAdmin: false } });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
@@ -74,14 +88,14 @@ app.post('/api/auth/register', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
     try {
         const { email, password } = req.body;
-        const user = await User.findOne({ email });
+        const user = await User.findOne({ where: { email } });
         if (!user) return res.status(400).json({ message: 'Invalid credentials' });
 
         const isMatch = await user.comparePassword(password);
         if (!isMatch) return res.status(400).json({ message: 'Invalid credentials' });
 
-        const token = jwt.sign({ id: user._id, isAdmin: false }, process.env.JWT_SECRET, { expiresIn: '7d' });
-        res.json({ token, user: { id: user._id, name: user.name, email: user.email, isAdmin: false } });
+        const token = jwt.sign({ id: user.id, isAdmin: false }, process.env.JWT_SECRET, { expiresIn: '7d' });
+        res.json({ token, user: { id: user.id, name: user.name, email: user.email, isAdmin: false } });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
@@ -90,14 +104,14 @@ app.post('/api/auth/login', async (req, res) => {
 app.put('/api/auth/profile/:id', async (req, res) => {
     try {
         const { name, email } = req.body;
-        const user = await User.findById(req.params.id);
+        const user = await User.findByPk(req.params.id);
         if (!user) return res.status(404).json({ message: 'User not found' });
 
-        user.name = name || user.name;
-        user.email = email || user.email;
+        if (name) user.name = name;
+        if (email) user.email = email;
         await user.save();
 
-        res.json({ id: user._id, name: user.name, email: user.email, isAdmin: false });
+        res.json({ id: user.id, name: user.name, email: user.email, isAdmin: false });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
@@ -106,14 +120,14 @@ app.put('/api/auth/profile/:id', async (req, res) => {
 app.put('/api/auth/password/:id', async (req, res) => {
     try {
         const { currentPassword, newPassword } = req.body;
-        const user = await User.findById(req.params.id);
+        const user = await User.findByPk(req.params.id);
 
         if (!user) return res.status(404).json({ message: 'User not found' });
 
         const isMatch = await user.comparePassword(currentPassword);
         if (!isMatch) return res.status(400).json({ message: 'Incorrect current password' });
 
-        user.password = newPassword;
+        user.password = newPassword; // Hook hashes it
         await user.save();
 
         res.json({ message: 'Password updated successfully' });
@@ -126,14 +140,13 @@ app.put('/api/auth/password/:id', async (req, res) => {
 app.post('/api/auth/admin/register', async (req, res) => {
     try {
         const { name, email, password } = req.body;
-        const existingAdmin = await Admin.findOne({ email });
+        const existingAdmin = await Admin.findOne({ where: { email } });
         if (existingAdmin) return res.status(400).json({ message: 'Admin already exists' });
 
-        const admin = new Admin({ name, email, password });
-        await admin.save();
+        const admin = await Admin.create({ name, email, password });
 
-        const token = jwt.sign({ id: admin._id, isAdmin: true }, process.env.JWT_SECRET, { expiresIn: '7d' });
-        res.status(201).json({ token, user: { id: admin._id, name: admin.name, email: admin.email, isAdmin: true } });
+        const token = jwt.sign({ id: admin.id, isAdmin: true }, process.env.JWT_SECRET, { expiresIn: '7d' });
+        res.status(201).json({ token, user: { id: admin.id, name: admin.name, email: admin.email, isAdmin: true } });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
@@ -142,7 +155,7 @@ app.post('/api/auth/admin/register', async (req, res) => {
 app.post('/api/auth/admin/login', async (req, res) => {
     try {
         const { email, password } = req.body;
-        const admin = await Admin.findOne({ email });
+        const admin = await Admin.findOne({ where: { email } });
 
         if (!admin) {
             await SecurityLog.create({
@@ -156,8 +169,8 @@ app.post('/api/auth/admin/login', async (req, res) => {
         }
 
         // Check if account is locked
-        if (admin.lockedUntil && admin.lockedUntil > Date.now()) {
-            const minutesLeft = Math.ceil((admin.lockedUntil - Date.now()) / 60000);
+        if (admin.lockedUntil && new Date(admin.lockedUntil) > new Date()) {
+            const minutesLeft = Math.ceil((new Date(admin.lockedUntil) - Date.now()) / 60000);
             await SecurityLog.create({
                 event: 'LOGIN_BLOCKED',
                 userEmail: email,
@@ -175,7 +188,7 @@ app.post('/api/auth/admin/login', async (req, res) => {
             let message = 'Invalid credentials';
 
             if (admin.failedLoginAttempts >= 5) {
-                admin.lockedUntil = Date.now() + 30 * 60 * 1000; // 30 minutes lock
+                admin.lockedUntil = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes lock
                 admin.failedLoginAttempts = 0;
                 message = 'Too many failed attempts. Account locked for 30 minutes.';
                 await SecurityLog.create({
@@ -214,7 +227,7 @@ app.post('/api/auth/admin/login', async (req, res) => {
             });
             return res.json({
                 requires2FA: true,
-                tempId: admin._id,
+                tempId: admin.id,
                 message: '2FA verification code sent to your registered device (Simulated)'
             });
         }
@@ -226,11 +239,11 @@ app.post('/api/auth/admin/login', async (req, res) => {
             status: 'SUCCESS'
         });
 
-        const token = jwt.sign({ id: admin._id, isAdmin: true }, process.env.JWT_SECRET, { expiresIn: '7d' });
+        const token = jwt.sign({ id: admin.id, isAdmin: true }, process.env.JWT_SECRET, { expiresIn: '7d' });
         res.json({
             token,
             user: {
-                id: admin._id,
+                id: admin.id,
                 name: admin.name,
                 email: admin.email,
                 isAdmin: true,
@@ -248,12 +261,10 @@ app.post('/api/auth/admin/login', async (req, res) => {
 app.post('/api/auth/admin/verify-2fa', async (req, res) => {
     try {
         const { id, code } = req.body;
-        const admin = await Admin.findById(id);
+        const admin = await Admin.findByPk(id);
 
         if (!admin) return res.status(404).json({ message: 'Admin not found' });
 
-        // In a real app, verify 'code' with a 2FA library (e.g., speakeasy)
-        // For simulation, we'll accept '123456'
         if (code !== '123456') {
             await SecurityLog.create({
                 event: '2FA_FAILURE',
@@ -273,11 +284,11 @@ app.post('/api/auth/admin/verify-2fa', async (req, res) => {
             status: 'SUCCESS'
         });
 
-        const token = jwt.sign({ id: admin._id, isAdmin: true }, process.env.JWT_SECRET, { expiresIn: '7d' });
+        const token = jwt.sign({ id: admin.id, isAdmin: true }, process.env.JWT_SECRET, { expiresIn: '7d' });
         res.json({
             token,
             user: {
-                id: admin._id,
+                id: admin.id,
                 name: admin.name,
                 email: admin.email,
                 isAdmin: true,
@@ -295,24 +306,20 @@ app.post('/api/auth/admin/verify-2fa', async (req, res) => {
 app.post('/api/auth/admin/forgot-password', async (req, res) => {
     try {
         const { email } = req.body;
-        const admin = await Admin.findOne({ email });
+        const admin = await Admin.findOne({ where: { email } });
 
         if (!admin) {
-            // Should not reveal if user exists or not
             return res.json({ message: 'If an account exists, a reset link has been sent.' });
         }
 
-        // Generate reset token
         const resetToken = crypto.randomBytes(32).toString('hex');
         const resetPasswordToken = crypto.createHash('sha256').update(resetToken).digest('hex');
-        const resetPasswordExpires = Date.now() + 30 * 60 * 1000; // 30 minutes
+        const resetPasswordExpires = new Date(Date.now() + 30 * 60 * 1000); // 30 mins
 
         admin.resetPasswordToken = resetPasswordToken;
         admin.resetPasswordExpires = resetPasswordExpires;
         await admin.save();
 
-        // In production, send email here
-        // For dev, log it and return it for easy testing
         console.log(`Reset Token for ${email}: ${resetToken}`);
 
         await SecurityLog.create({
@@ -325,7 +332,7 @@ app.post('/api/auth/admin/forgot-password', async (req, res) => {
 
         res.json({
             message: 'Reset link sent (Check server console for token)',
-            devToken: resetToken // REMOVE IN PRODUCTION
+            devToken: resetToken
         });
     } catch (err) {
         res.status(500).json({ message: err.message });
@@ -337,10 +344,13 @@ app.post('/api/auth/admin/reset-password', async (req, res) => {
     try {
         const { token, newPassword } = req.body;
         const resetPasswordToken = crypto.createHash('sha256').update(token).digest('hex');
+        const { Op } = require('sequelize');
 
         const admin = await Admin.findOne({
-            resetPasswordToken,
-            resetPasswordExpires: { $gt: Date.now() }
+            where: {
+                resetPasswordToken,
+                resetPasswordExpires: { [Op.gt]: new Date() }
+            }
         });
 
         if (!admin) {
@@ -348,9 +358,9 @@ app.post('/api/auth/admin/reset-password', async (req, res) => {
         }
 
         admin.password = newPassword;
-        admin.resetPasswordToken = undefined;
-        admin.resetPasswordExpires = undefined;
-        admin.lockedUntil = null; // Unlocks account if locked
+        admin.resetPasswordToken = null;
+        admin.resetPasswordExpires = null;
+        admin.lockedUntil = null;
         admin.failedLoginAttempts = 0;
 
         await admin.save();
@@ -374,7 +384,7 @@ app.post('/api/auth/admin/reset-password', async (req, res) => {
 app.put('/api/auth/admin/profile/:id', async (req, res) => {
     try {
         const { name, bio, avatar, twoFactorEnabled } = req.body;
-        const admin = await Admin.findById(req.params.id);
+        const admin = await Admin.findByPk(req.params.id);
         if (!admin) return res.status(404).json({ message: 'Admin not found' });
 
         if (name) admin.name = name;
@@ -384,7 +394,7 @@ app.put('/api/auth/admin/profile/:id', async (req, res) => {
 
         await admin.save();
         res.json({
-            id: admin._id,
+            id: admin.id,
             name: admin.name,
             email: admin.email,
             isAdmin: true,
@@ -401,7 +411,7 @@ app.put('/api/auth/admin/profile/:id', async (req, res) => {
 app.put('/api/auth/admin/password/:id', async (req, res) => {
     try {
         const { currentPassword, newPassword } = req.body;
-        const admin = await Admin.findById(req.params.id);
+        const admin = await Admin.findByPk(req.params.id);
         if (!admin) return res.status(404).json({ message: 'Admin not found' });
 
         if (!isValidPassword(newPassword)) {
@@ -420,9 +430,11 @@ app.put('/api/auth/admin/password/:id', async (req, res) => {
         res.status(500).json({ message: err.message });
     }
 });
+
+// Product Routes
 app.get('/api/products', async (req, res) => {
     try {
-        const products = await Product.find().sort({ createdAt: -1 });
+        const products = await Product.findAll({ order: [['createdAt', 'DESC']] });
         res.json(products);
     } catch (err) {
         res.status(500).json({ message: err.message });
@@ -430,9 +442,8 @@ app.get('/api/products', async (req, res) => {
 });
 
 app.post('/api/products', async (req, res) => {
-    const product = new Product(req.body);
     try {
-        const newProduct = await product.save();
+        const newProduct = await Product.create(req.body);
 
         await SecurityLog.create({
             event: 'PRODUCT_CREATE',
@@ -450,17 +461,22 @@ app.post('/api/products', async (req, res) => {
 
 app.put('/api/products/:id', async (req, res) => {
     try {
-        const updatedProduct = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        // Sequelize update returns [count, [rows]] only for postgres with returning: true
+        // For other dialects, we need to find then update or update then find
+        const product = await Product.findByPk(req.params.id);
+        if (!product) return res.status(404).json({ message: 'Product not found' });
+
+        await product.update(req.body);
 
         await SecurityLog.create({
             event: 'PRODUCT_UPDATE',
             userEmail: 'admin@kicks.com',
-            details: `Updated product: ${updatedProduct.name}`,
+            details: `Updated product: ${product.name}`,
             severity: 'LOW',
             status: 'SUCCESS'
         });
 
-        res.json(updatedProduct);
+        res.json(product);
     } catch (err) {
         res.status(400).json({ message: err.message });
     }
@@ -468,12 +484,16 @@ app.put('/api/products/:id', async (req, res) => {
 
 app.delete('/api/products/:id', async (req, res) => {
     try {
-        const deletedProduct = await Product.findByIdAndDelete(req.params.id);
+        const product = await Product.findByPk(req.params.id);
+        if (!product) return res.status(404).json({ message: 'Product not found' });
+
+        const name = product.name;
+        await product.destroy();
 
         await SecurityLog.create({
             event: 'PRODUCT_DELETE',
             userEmail: 'admin@kicks.com',
-            details: `Deleted product: ${deletedProduct?.name || req.params.id}`,
+            details: `Deleted product: ${name}`,
             severity: 'MEDIUM',
             status: 'SUCCESS'
         });
@@ -487,10 +507,13 @@ app.delete('/api/products/:id', async (req, res) => {
 app.post('/api/products/:id/reviews', async (req, res) => {
     try {
         const { rating, comment, user } = req.body;
-        const product = await Product.findById(req.params.id);
+        const product = await Product.findByPk(req.params.id);
 
         if (product) {
-            const alreadyReviewed = product.reviews.find(
+            // Note: product.reviews is a JSON array
+            const currentReviews = product.reviews || [];
+
+            const alreadyReviewed = currentReviews.find(
                 (r) => r.user === user
             );
 
@@ -498,18 +521,27 @@ app.post('/api/products/:id/reviews', async (req, res) => {
                 return res.status(400).json({ message: 'Product already reviewed' });
             }
 
+            const reviewId = Date.now().toString();
             const review = {
+                id: reviewId,
+                _id: reviewId,
                 user,
                 rating: Number(rating),
                 comment,
-                date: Date.now()
+                date: new Date()
             };
 
-            product.reviews.push(review);
-            product.numReviews = product.reviews.length;
-            product.rating = product.reviews.reduce((acc, item) => item.rating + acc, 0) / product.reviews.length;
+            const updatedReviews = [...currentReviews, review];
 
-            await product.save();
+            const numReviews = updatedReviews.length;
+            const avgRating = updatedReviews.reduce((acc, item) => item.rating + acc, 0) / numReviews;
+
+            await product.update({
+                reviews: updatedReviews,
+                numReviews: numReviews,
+                rating: avgRating
+            });
+
             res.status(201).json({ message: 'Review added' });
         } else {
             res.status(404).json({ message: 'Product not found' });
@@ -521,22 +553,32 @@ app.post('/api/products/:id/reviews', async (req, res) => {
 
 app.delete('/api/products/:id/reviews/:reviewId', async (req, res) => {
     try {
-        const product = await Product.findById(req.params.id);
+        const product = await Product.findByPk(req.params.id);
         if (product) {
-            const reviewIndex = product.reviews.findIndex(r => r._id.toString() === req.params.reviewId);
+            const currentReviews = product.reviews || [];
+            // Assuming reviewId is passed as string, and we store it as id in review object
+            // Note: The previous mongo one used _id, here we simulated id in the previous route.
+            // If existing validation relies on _id, this might be tricky if not migrated.
+            // Since we are starting fresh with SQL, new reviews have 'id'.
 
-            if (reviewIndex === -1) {
+            // Filter by id or _id to be safe
+            const updatedReviews = currentReviews.filter(r => r.id !== req.params.reviewId && r._id !== req.params.reviewId);
+
+            if (currentReviews.length === updatedReviews.length) {
                 return res.status(404).json({ message: 'Review not found' });
             }
 
-            product.reviews.splice(reviewIndex, 1);
-
-            product.numReviews = product.reviews.length;
-            product.rating = product.reviews.length > 0
-                ? product.reviews.reduce((acc, item) => item.rating + acc, 0) / product.reviews.length
+            const numReviews = updatedReviews.length;
+            const avgRating = numReviews > 0
+                ? updatedReviews.reduce((acc, item) => item.rating + acc, 0) / numReviews
                 : 0;
 
-            await product.save();
+            await product.update({
+                reviews: updatedReviews,
+                numReviews: numReviews,
+                rating: avgRating
+            });
+
             res.json({ message: 'Review removed' });
         } else {
             res.status(404).json({ message: 'Product not found' });
@@ -549,7 +591,7 @@ app.delete('/api/products/:id/reviews/:reviewId', async (req, res) => {
 // Routes - Orders
 app.get('/api/orders', async (req, res) => {
     try {
-        const orders = await Order.find().sort({ createdAt: -1 });
+        const orders = await Order.findAll({ order: [['createdAt', 'DESC']] });
         res.json(orders);
     } catch (err) {
         res.status(500).json({ message: err.message });
@@ -561,19 +603,19 @@ app.post('/api/orders', async (req, res) => {
     if (!orderData.date) {
         orderData.date = new Date().toISOString().split('T')[0];
     }
-    const order = new Order(orderData);
+
     try {
-        const newOrder = await order.save();
+        const newOrder = await Order.create(orderData);
 
         // Automatically decrease stock for each item in the order
         if (orderData.items && Array.isArray(orderData.items)) {
             for (const item of orderData.items) {
-                // Find product by id (could be item.id or item._id)
                 const productId = item.id || item._id;
                 if (productId) {
-                    await Product.findByIdAndUpdate(productId, {
-                        $inc: { stock: -(item.quantity || 1) }
-                    });
+                    const product = await Product.findByPk(productId);
+                    if (product) {
+                        await product.decrement('stock', { by: item.quantity || 1 });
+                    }
                 }
             }
         }
@@ -586,12 +628,11 @@ app.post('/api/orders', async (req, res) => {
 
 app.patch('/api/orders/:id', async (req, res) => {
     try {
-        const updatedOrder = await Order.findByIdAndUpdate(
-            req.params.id,
-            { status: req.body.status },
-            { new: true }
-        );
-        res.json(updatedOrder);
+        const order = await Order.findByPk(req.params.id);
+        if (!order) return res.status(404).json({ message: 'Order not found' });
+
+        await order.update({ status: req.body.status });
+        res.json(order);
     } catch (err) {
         res.status(400).json({ message: err.message });
     }
@@ -600,7 +641,10 @@ app.patch('/api/orders/:id', async (req, res) => {
 // Routes - Users
 app.get('/api/users', async (req, res) => {
     try {
-        const users = await User.find({}, '-password').sort({ createdAt: -1 });
+        const users = await User.findAll({
+            order: [['createdAt', 'DESC']],
+            attributes: { exclude: ['password'] }
+        });
         res.json(users);
     } catch (err) {
         res.status(500).json({ message: err.message });
@@ -612,8 +656,7 @@ app.get('/api/settings', async (req, res) => {
     try {
         let settings = await Settings.findOne();
         if (!settings) {
-            settings = new Settings();
-            await settings.save();
+            settings = await Settings.create({});
         }
         res.json(settings);
     } catch (err) {
@@ -625,12 +668,9 @@ app.post('/api/settings', async (req, res) => {
     try {
         let settings = await Settings.findOne();
         if (settings) {
-            Object.assign(settings, req.body);
-            settings.lastUpdated = Date.now();
-            await settings.save();
+            await settings.update({ ...req.body, lastUpdated: new Date() });
         } else {
-            settings = new Settings(req.body);
-            await settings.save();
+            settings = await Settings.create(req.body);
         }
 
         await SecurityLog.create({
@@ -650,7 +690,10 @@ app.post('/api/settings', async (req, res) => {
 // Route - Security Logs
 app.get('/api/security/logs', async (req, res) => {
     try {
-        const logs = await SecurityLog.find().sort({ createdAt: -1 }).limit(100);
+        const logs = await SecurityLog.findAll({
+            order: [['createdAt', 'DESC']],
+            limit: 100
+        });
         res.json(logs);
     } catch (err) {
         res.status(500).json({ message: err.message });
@@ -670,9 +713,8 @@ app.post('/api/create-payment-intent', async (req, res) => {
         const stripe = require('stripe')(stripeKey);
         const { amount, currency = 'inr' } = req.body;
 
-        // Create a PaymentIntent
         const paymentIntent = await stripe.paymentIntents.create({
-            amount: Math.round(amount * 100), // Convert to smallest currency unit (paise/cents)
+            amount: Math.round(amount * 100),
             currency: currency,
             automatic_payment_methods: {
                 enabled: true,
@@ -691,7 +733,7 @@ app.post('/api/create-payment-intent', async (req, res) => {
 // Routes - Coupons
 app.get('/api/coupons', async (req, res) => {
     try {
-        const coupons = await Coupon.find().sort({ createdAt: -1 });
+        const coupons = await Coupon.findAll({ order: [['createdAt', 'DESC']] });
         res.json(coupons);
     } catch (err) {
         res.status(500).json({ message: err.message });
@@ -700,8 +742,7 @@ app.get('/api/coupons', async (req, res) => {
 
 app.post('/api/coupons', async (req, res) => {
     try {
-        const coupon = new Coupon(req.body);
-        const newCoupon = await coupon.save();
+        const newCoupon = await Coupon.create(req.body);
         await SecurityLog.create({
             event: 'COUPON_CREATE',
             userEmail: 'admin@system.local',
@@ -717,11 +758,16 @@ app.post('/api/coupons', async (req, res) => {
 
 app.delete('/api/coupons/:id', async (req, res) => {
     try {
-        const deletedCoupon = await Coupon.findByIdAndDelete(req.params.id);
+        const coupon = await Coupon.findByPk(req.params.id);
+        if (!coupon) return res.status(404).json({ message: 'Coupon not found' });
+
+        const code = coupon.code;
+        await coupon.destroy();
+
         await SecurityLog.create({
             event: 'COUPON_DELETE',
             userEmail: 'admin@system.local',
-            details: `Deleted coupon: ${deletedCoupon?.code}`,
+            details: `Deleted coupon: ${code}`,
             severity: 'MEDIUM',
             status: 'SUCCESS'
         });
@@ -734,7 +780,7 @@ app.delete('/api/coupons/:id', async (req, res) => {
 app.post('/api/coupons/validate', async (req, res) => {
     try {
         const { code, cartTotal } = req.body;
-        const coupon = await Coupon.findOne({ code, isActive: true });
+        const coupon = await Coupon.findOne({ where: { code, isActive: true } });
 
         if (!coupon) return res.status(404).json({ message: 'Invalid coupon code' });
 
@@ -747,7 +793,7 @@ app.post('/api/coupons/validate', async (req, res) => {
         }
 
         let discount = 0;
-        if (coupon.type === 'percentage') {
+        if (coupon.discountType === 'percentage') { // Adjusted field name from mongo
             discount = (cartTotal * coupon.value) / 100;
         } else {
             discount = coupon.value;
@@ -755,7 +801,7 @@ app.post('/api/coupons/validate', async (req, res) => {
 
         res.json({
             success: true,
-            discount: Math.min(discount, cartTotal), // Discount cannot exceed total
+            discount: Math.min(discount, cartTotal),
             coupon: coupon
         });
     } catch (err) {

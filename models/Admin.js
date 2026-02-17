@@ -1,41 +1,78 @@
-const mongoose = require('mongoose');
+const { Model, DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
 const bcrypt = require('bcryptjs');
 
-const adminSchema = new mongoose.Schema({
-    name: { type: String, required: true },
-    email: { type: String, required: true, unique: true },
-    password: { type: String, required: true },
-    role: { type: String, default: 'admin' },
-    bio: { type: String, default: '' },
-    avatar: { type: String, default: '' },
-    twoFactorEnabled: { type: Boolean, default: false },
-    twoFactorSecret: { type: String, default: null },
-    failedLoginAttempts: { type: Number, default: 0 },
-    lockedUntil: { type: Date, default: null },
-    resetPasswordToken: { type: String, default: null },
-    resetPasswordExpires: { type: Date, default: null }
-}, { timestamps: true });
+class Admin extends Model { }
 
-// Hash password before saving
-adminSchema.pre('save', async function () {
-    if (!this.isModified('password')) return;
-
-    const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
+Admin.init({
+    id: {
+        type: DataTypes.INTEGER,
+        primaryKey: true,
+        autoIncrement: true
+    },
+    name: {
+        type: DataTypes.STRING,
+        allowNull: false
+    },
+    email: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        unique: true
+    },
+    password: {
+        type: DataTypes.STRING,
+        allowNull: false
+    },
+    bio: {
+        type: DataTypes.STRING,
+    },
+    avatar: {
+        type: DataTypes.STRING,
+    },
+    twoFactorEnabled: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: false
+    },
+    failedLoginAttempts: {
+        type: DataTypes.INTEGER,
+        defaultValue: 0
+    },
+    lockedUntil: {
+        type: DataTypes.DATE,
+        defaultValue: null
+    },
+    resetPasswordToken: {
+        type: DataTypes.STRING,
+        defaultValue: null
+    },
+    resetPasswordExpires: {
+        type: DataTypes.DATE,
+        defaultValue: null
+    }
+}, {
+    sequelize,
+    modelName: 'Admin',
+    tableName: 'Admins',
+    timestamps: true,
+    hooks: {
+        beforeSave: async (admin) => {
+            if (admin.changed('password')) {
+                const salt = await bcrypt.genSalt(10);
+                admin.password = await bcrypt.hash(admin.password, salt);
+            }
+        }
+    }
 });
 
-// Compare password method
-adminSchema.methods.comparePassword = async function (password) {
+Admin.prototype.toJSON = function () {
+    const values = Object.assign({}, this.get());
+    values._id = values.id;
+    delete values.password;
+    return values;
+};
+
+Admin.prototype.comparePassword = async function (password) {
     return await bcrypt.compare(password, this.password);
 };
 
-// Virtual for id
-adminSchema.virtual('id').get(function () {
-    return this._id.toHexString();
-});
-
-adminSchema.set('toJSON', {
-    virtuals: true
-});
-
-module.exports = mongoose.model('Admin', adminSchema);
+module.exports = Admin;

@@ -1,13 +1,49 @@
-const mongoose = require('mongoose');
+const { Model, DataTypes } = require('sequelize');
+const sequelize = require('../config/database');
 
-const couponSchema = new mongoose.Schema({
-    code: { type: String, required: true, unique: true },
-    type: { type: String, enum: ['percentage', 'fixed'], required: true },
-    value: { type: Number, required: true },
-    minPurchase: { type: Number, default: 0 },
-    expiryDate: { type: Date },
-    isActive: { type: Boolean, default: true },
-    usageCount: { type: Number, default: 0 }
-}, { timestamps: true });
+class Coupon extends Model { }
 
-module.exports = mongoose.model('Coupon', couponSchema);
+Coupon.init({
+    id: {
+        type: DataTypes.INTEGER,
+        primaryKey: true,
+        autoIncrement: true
+    },
+    code: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        unique: true
+    },
+    discountType: {
+        type: DataTypes.ENUM('percentage', 'fixed'),
+        defaultValue: 'percentage'
+    },
+    value: {
+        type: DataTypes.FLOAT,
+        defaultValue: 0
+    },
+    minPurchase: {
+        type: DataTypes.FLOAT,
+        defaultValue: 0
+    },
+    expiryDate: {
+        type: DataTypes.DATE
+    },
+    isActive: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: true
+    }
+}, {
+    sequelize,
+    modelName: 'Coupon',
+    tableName: 'Coupons',
+    timestamps: true
+});
+
+Coupon.prototype.toJSON = function () {
+    const values = Object.assign({}, this.get());
+    values._id = values.id;
+    return values;
+};
+
+module.exports = Coupon;
